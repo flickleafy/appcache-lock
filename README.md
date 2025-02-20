@@ -179,7 +179,7 @@ To uninstall AppCache-Lock:
 
 ## License
 
-*Specify your license here (e.g., MIT License).*
+GNU GENERAL PUBLIC LICENSE Version 3
 
 ## Contributing
 
