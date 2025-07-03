@@ -1,3 +1,19 @@
-# List of application commands
+# List of application commands to preload
+# Each line should contain a command name that can be found in your PATH
+# Comments start with # and empty lines are ignored
+
+# Web browsers
 google-chrome
+firefox
+
+# Code editors and IDEs
 code
+vim
+nano
+
+# Media applications
+vlc
+audacity
+
+# Office applications
+libreoffice

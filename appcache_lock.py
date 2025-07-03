@@ -14,29 +14,47 @@ import argparse
 import json
 import logging
 import os
+import psutil
 import shutil
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, NamedTuple
 import signal
 
 __version__ = "2.0.0"
 
+class MemoryInfo(NamedTuple):
+    """Memory information structure."""
+    total: int
+    available: int
+    used: int
+    free: int
+    percent: float
+
+class DirectoryInfo(NamedTuple):
+    """Directory information structure."""
+    path: str
+    size: int
+    priority: int
+    source: str  # 'app' or 'resource'
+
 class AppCacheLock:
     """Main class for managing application cache locking operations."""
     
-    def __init__(self, config_dir: Path = None, verbose: bool = False):
+    def __init__(self, config_dir: Path = None, verbose: bool = False, memory_limit_percent: float = 50.0):
         """
         Initialize AppCache-Lock.
         
         Args:
             config_dir: Directory containing configuration files
             verbose: Enable verbose logging
+            memory_limit_percent: Maximum percentage of system memory to use for caching
         """
         self.config_dir = config_dir or Path.cwd()
+        self.memory_limit_percent = memory_limit_percent
         self.logger = self._setup_logging(verbose)
         self.app_commands_file = self.config_dir / "app_commands"
         self.resource_dirs_file = self.config_dir / "resource_dirs"
@@ -76,6 +94,191 @@ class AppCacheLock:
                     process.kill()
                     process.wait()
         self.processes.clear()
+    
+    def get_memory_info(self) -> MemoryInfo:
+        """
+        Get current system memory information.
+        
+        Returns:
+            MemoryInfo object with memory statistics
+        """
+        memory = psutil.virtual_memory()
+        return MemoryInfo(
+            total=memory.total,
+            available=memory.available,
+            used=memory.used,
+            free=memory.free,
+            percent=memory.percent
+        )
+    
+    def get_memory_limit(self) -> int:
+        """
+        Calculate the maximum memory that can be used for caching.
+        
+        Returns:
+            Maximum cache size in bytes
+        """
+        memory_info = self.get_memory_info()
+        limit = int(memory_info.total * (self.memory_limit_percent / 100))
+        self.logger.debug(f"Memory limit set to {self._format_size(limit)} "
+                         f"({self.memory_limit_percent}% of {self._format_size(memory_info.total)})")
+        return limit
+    
+    def log_memory_statistics(self, before: MemoryInfo, after: MemoryInfo, cached_size: int) -> None:
+        """
+        Log detailed memory statistics before and after caching.
+        
+        Args:
+            before: Memory info before caching
+            after: Memory info after caching
+            cached_size: Total size of cached data
+        """
+        self.logger.info("=" * 60)
+        self.logger.info("MEMORY STATISTICS")
+        self.logger.info("=" * 60)
+        self.logger.info(f"Total System RAM:     {self._format_size(before.total)}")
+        self.logger.info(f"Memory Limit (50%):   {self._format_size(self.get_memory_limit())}")
+        self.logger.info("")
+        self.logger.info("BEFORE CACHING:")
+        self.logger.info(f"  Used Memory:        {self._format_size(before.used)} ({before.percent:.1f}%)")
+        self.logger.info(f"  Available Memory:   {self._format_size(before.available)}")
+        self.logger.info("")
+        self.logger.info("CACHING OPERATION:")
+        self.logger.info(f"  Data Cached:        {self._format_size(cached_size)}")
+        self.logger.info("")
+        self.logger.info("AFTER CACHING:")
+        self.logger.info(f"  Used Memory:        {self._format_size(after.used)} ({after.percent:.1f}%)")
+        self.logger.info(f"  Available Memory:   {self._format_size(after.available)}")
+        self.logger.info(f"  Memory Increase:    {self._format_size(after.used - before.used)}")
+        self.logger.info("=" * 60)
+    
+    def get_directory_size(self, directory: str) -> int:
+        """
+        Calculate the total size of a directory and its contents.
+        
+        Args:
+            directory: Path to the directory
+            
+        Returns:
+            Size in bytes, or 0 if directory doesn't exist or is inaccessible
+        """
+        try:
+            total_size = 0
+            dir_path = Path(directory)
+            
+            if not dir_path.exists():
+                return 0
+                
+            for file_path in dir_path.rglob('*'):
+                try:
+                    if file_path.is_file():
+                        total_size += file_path.stat().st_size
+                except OSError:
+                    # Skip files we can't read
+                    continue
+                    
+            return total_size
+        except Exception as e:
+            self.logger.debug(f"Error calculating size for {directory}: {e}")
+            return 0
+    
+    def _format_size(self, size_bytes: int) -> str:
+        """
+        Format size in bytes to human-readable format.
+        
+        Args:
+            size_bytes: Size in bytes
+            
+        Returns:
+            Formatted size string (e.g., "1.5 GB")
+        """
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} PB"
+    
+    def prioritize_directories(self, directories: List[str]) -> List[DirectoryInfo]:
+        """
+        Analyze directories, calculate sizes, and prioritize them.
+        
+        Args:
+            directories: List of directory paths
+            
+        Returns:
+            List of DirectoryInfo objects sorted by priority
+        """
+        self.logger.info("Analyzing directory sizes and priorities...")
+        dir_info_list = []
+        
+        # Get app directories (higher priority)
+        app_commands = self._load_config_file(self.app_commands_file)
+        app_dirs = self._find_executable_directories(app_commands) if app_commands else []
+        
+        for directory in directories:
+            size = self.get_directory_size(directory)
+            if size > 0:
+                # Determine priority and source
+                if directory in app_dirs:
+                    priority = 1  # High priority for apps
+                    source = "app"
+                else:
+                    priority = 2  # Lower priority for resources
+                    source = "resource"
+                
+                dir_info = DirectoryInfo(
+                    path=directory,
+                    size=size,
+                    priority=priority,
+                    source=source
+                )
+                dir_info_list.append(dir_info)
+        
+        # Sort by priority (1=highest) then by size (largest first)
+        dir_info_list.sort(key=lambda x: (x.priority, -x.size))
+        
+        return dir_info_list
+    
+    def select_directories_within_limit(self, dir_info_list: List[DirectoryInfo]) -> Tuple[List[str], int]:
+        """
+        Select directories to cache within the memory limit.
+        
+        Args:
+            dir_info_list: List of DirectoryInfo objects sorted by priority
+            
+        Returns:
+            Tuple of (selected_directories, total_size)
+        """
+        memory_limit = self.get_memory_limit()
+        selected_dirs = []
+        total_size = 0
+        
+        self.logger.info(f"Selecting directories within memory limit: {self._format_size(memory_limit)}")
+        self.logger.info("")
+        self.logger.info("DIRECTORY ANALYSIS:")
+        self.logger.info("-" * 80)
+        self.logger.info(f"{'Priority':<8} {'Source':<8} {'Size':<12} {'Status':<10} {'Directory'}")
+        self.logger.info("-" * 80)
+        
+        for dir_info in dir_info_list:
+            if total_size + dir_info.size <= memory_limit:
+                selected_dirs.append(dir_info.path)
+                total_size += dir_info.size
+                status = "SELECTED"
+            else:
+                status = "SKIPPED"
+            
+            self.logger.info(
+                f"{dir_info.priority:<8} {dir_info.source:<8} "
+                f"{self._format_size(dir_info.size):<12} {status:<10} {dir_info.path}"
+            )
+        
+        self.logger.info("-" * 80)
+        self.logger.info(f"Selected: {len(selected_dirs)} directories, "
+                        f"Total size: {self._format_size(total_size)}")
+        self.logger.info("")
+        
+        return selected_dirs, total_size
     
     def _check_dependencies(self) -> bool:
         """Check if required dependencies are available."""
@@ -236,7 +439,7 @@ class AppCacheLock:
             )
             
             self.processes.append(process)
-            stdout, stderr = process.communicate()
+            _, stderr = process.communicate()
             
             if process.returncode == 0:
                 self.logger.info(f"Successfully locked: {directory}")
@@ -292,7 +495,7 @@ class AppCacheLock:
     
     def preload_applications(self, max_workers: int = 4, timeout: int = 300) -> bool:
         """
-        Main method to preload applications and resources into memory.
+        Main method to preload applications and resources into memory with memory management.
         
         Args:
             max_workers: Maximum number of concurrent vmtouch processes
@@ -303,6 +506,9 @@ class AppCacheLock:
         """
         if not self._check_dependencies():
             return False
+        
+        # Get memory info before caching
+        memory_before = self.get_memory_info()
         
         # Load configuration
         app_commands = self._load_config_file(self.app_commands_file)
@@ -332,34 +538,52 @@ class AppCacheLock:
             self.logger.error("No valid directories found to lock")
             return False
         
-        self.logger.info(f"Locking {len(unique_dirs)} directories into memory...")
+        # Prioritize directories and check memory limits
+        dir_info_list = self.prioritize_directories(unique_dirs)
+        selected_dirs, total_cache_size = self.select_directories_within_limit(dir_info_list)
+        
+        if not selected_dirs:
+            self.logger.error("No directories selected within memory limit")
+            return False
+        
+        self.logger.info(f"Locking {len(selected_dirs)} directories into memory...")
         
         # Lock directories concurrently
         success_count = 0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_dir = {
                 executor.submit(self._lock_directory, directory, timeout): directory
-                for directory in unique_dirs
+                for directory in selected_dirs
             }
             
             for future in as_completed(future_to_dir):
-                directory, success = future.result()
+                _, success = future.result()
                 if success:
                     success_count += 1
         
+        # Get memory info after caching
+        memory_after = self.get_memory_info()
+        
+        # Log comprehensive statistics
+        self.log_memory_statistics(memory_before, memory_after, total_cache_size)
+        
         self.logger.info(
-            f"Completed: {success_count}/{len(unique_dirs)} directories locked successfully"
+            f"Completed: {success_count}/{len(selected_dirs)} directories locked successfully"
         )
         
-        return success_count == len(unique_dirs)
+        return success_count == len(selected_dirs)
     
     def verify_sizes(self) -> bool:
         """
-        Calculate and display sizes of configured directories.
+        Calculate and display sizes of configured directories with memory analysis.
         
         Returns:
             True if verification completed successfully
         """
+        # Get current memory info
+        memory_info = self.get_memory_info()
+        memory_limit = self.get_memory_limit()
+        
         # Load configuration
         app_commands = self._load_config_file(self.app_commands_file)
         resource_dirs = self._load_config_file(self.resource_dirs_file)
@@ -388,8 +612,29 @@ class AppCacheLock:
             self.logger.error("No valid directories found")
             return False
         
-        # Calculate sizes
-        self.calculate_directory_sizes(unique_dirs)
+        # Prioritize directories and analyze memory usage
+        dir_info_list = self.prioritize_directories(unique_dirs)
+        selected_dirs, total_cache_size = self.select_directories_within_limit(dir_info_list)
+        
+        # Display summary
+        self.logger.info("")
+        self.logger.info("MEMORY ANALYSIS SUMMARY:")
+        self.logger.info("=" * 60)
+        self.logger.info(f"Total System RAM:     {self._format_size(memory_info.total)}")
+        self.logger.info(f"Currently Used:       {self._format_size(memory_info.used)} ({memory_info.percent:.1f}%)")
+        self.logger.info(f"Available for Cache:  {self._format_size(memory_limit)}")
+        self.logger.info(f"Will be Cached:       {self._format_size(total_cache_size)}")
+        self.logger.info(f"Remaining Limit:      {self._format_size(memory_limit - total_cache_size)}")
+        self.logger.info("")
+        self.logger.info(f"Directories Found:    {len(unique_dirs)}")
+        self.logger.info(f"Directories Selected: {len(selected_dirs)}")
+        self.logger.info(f"Directories Skipped:  {len(unique_dirs) - len(selected_dirs)}")
+        self.logger.info("=" * 60)
+        
+        if len(selected_dirs) < len(unique_dirs):
+            skipped = len(unique_dirs) - len(selected_dirs)
+            self.logger.warning(f"{skipped} directories will be skipped due to memory limits")
+        
         return True
 
 
@@ -566,6 +811,7 @@ def main():
 Examples:
   %(prog)s preload                    # Preload apps with default config
   %(prog)s preload --verbose          # Preload with verbose output
+  %(prog)s preload --memory-limit 40  # Use 40%% of system memory
   %(prog)s verify-sizes               # Check sizes of configured directories
   %(prog)s install                    # Install as system service
   %(prog)s uninstall                  # Remove system service
@@ -577,6 +823,8 @@ Examples:
                        help='Enable verbose output')
     parser.add_argument('--config-dir', type=Path, default=Path.cwd(),
                        help='Directory containing config files (default: current directory)')
+    parser.add_argument('--memory-limit', type=float, default=50.0,
+                       help='Maximum percentage of system memory to use for caching (default: 50)')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
@@ -602,8 +850,17 @@ Examples:
     
     args = parser.parse_args()
     
+    # Validate memory limit
+    if not 1 <= args.memory_limit <= 90:
+        print("Error: Memory limit must be between 1 and 90 percent", file=sys.stderr)
+        sys.exit(1)
+    
     if args.command == 'preload':
-        app = AppCacheLock(config_dir=args.config_dir, verbose=args.verbose)
+        app = AppCacheLock(
+            config_dir=args.config_dir, 
+            verbose=args.verbose,
+            memory_limit_percent=args.memory_limit
+        )
         success = app.preload_applications(
             max_workers=args.max_workers,
             timeout=args.timeout
@@ -611,7 +868,11 @@ Examples:
         sys.exit(0 if success else 1)
     
     elif args.command == 'verify-sizes':
-        app = AppCacheLock(config_dir=args.config_dir, verbose=args.verbose)
+        app = AppCacheLock(
+            config_dir=args.config_dir, 
+            verbose=args.verbose,
+            memory_limit_percent=args.memory_limit
+        )
         success = app.verify_sizes()
         sys.exit(0 if success else 1)
     

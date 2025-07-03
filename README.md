@@ -26,13 +26,15 @@ This project consists of the following components:
 ## Features
 
 - **Modern Python Implementation:** Professional, maintainable Python code with proper error handling
+- **Intelligent Memory Management:** Automatically respects system memory limits (default: 50% of total RAM)
+- **Application Prioritization:** Apps are cached before resource directories to maximize performance impact
 - **Concurrent Processing:** Uses ThreadPoolExecutor for efficient parallel vmtouch operations
 - **Dynamic Discovery:** Automatically locates application executables and determines their installation directories
 - **Memory Locking:** Uses vmtouch to lock directories in RAM, ensuring key data remains in the OS page cache
 - **Duplicate Prevention:** Filters out duplicate directories to avoid redundant operations
 - **Configuration Management:** Easily update which applications and directories are targeted via configuration files
 - **Integrated Installation:** Built-in installer that sets up systemd service for automated execution
-- **Size Verification:** Calculate and display directory sizes before locking
+- **Comprehensive Analysis:** Calculate and display directory sizes, memory usage, and caching statistics
 - **Graceful Shutdown:** Proper signal handling for clean process termination
 - **Comprehensive Logging:** Detailed logging with configurable verbosity levels
 - **Root Privilege Handling:** Intelligent sudo usage when needed
@@ -117,16 +119,19 @@ This file contains additional directories to lock into memory. These are typical
 python3 appcache_lock.py <command> [options]
 
 # Available commands:
-preload         # Preload applications into memory
-verify-sizes    # Calculate and display directory sizes
+preload         # Preload applications into memory with intelligent management
+verify-sizes    # Calculate and display directory sizes with memory analysis
 install         # Install as system service
 uninstall       # Remove system service
 
-# Common options:
---verbose, -v           # Enable verbose output
+# Global options:
+--verbose, -v           # Enable verbose output with detailed logging
 --config-dir DIR        # Use custom configuration directory
---max-workers N         # Maximum concurrent processes (preload only)
---timeout N             # Timeout per operation in seconds (preload only)
+--memory-limit N        # Maximum percentage of system memory to use (default: 50)
+
+# Preload-specific options:
+--max-workers N         # Maximum concurrent processes (default: 4)
+--timeout N             # Timeout per operation in seconds (default: 300)
 ```
 
 ## Examples
@@ -136,10 +141,16 @@ uninstall       # Remove system service
 python3 appcache_lock.py verify-sizes
 
 # Preload with verbose output
-python3 appcache_lock.py preload --verbose
+python3 appcache_lock.py --verbose preload
+
+# Use only 30% of system memory for caching
+python3 appcache_lock.py --memory-limit 30 preload
 
 # Preload with custom settings
 python3 appcache_lock.py preload --max-workers 8 --timeout 600
+
+# Analyze memory usage with detailed output
+python3 appcache_lock.py --verbose --memory-limit 40 verify-sizes
 
 # Install as system service
 sudo python3 appcache_lock.py install
@@ -261,7 +272,12 @@ This project is licensed under the GPL-3.0 License - see the LICENSE file for de
 ## Changelog
 
 ### Version 2.0.0
-- Complete rewrite in Python
+
+- Complete rewrite in Python for better maintainability and features
+- **Intelligent Memory Management:** Respects system memory limits (configurable, default 50%)
+- **Application Prioritization:** Apps cached before resources for maximum performance impact
+- **Comprehensive Memory Analysis:** Detailed statistics of memory usage before and after caching
+- **Smart Directory Selection:** Automatically selects directories within memory constraints
 - Concurrent processing for improved performance
 - Built-in installation and service management
 - Enhanced error handling and logging
@@ -270,6 +286,7 @@ This project is licensed under the GPL-3.0 License - see the LICENSE file for de
 - Graceful shutdown handling
 
 ### Version 1.x (Legacy)
+
 - Original bash implementation
 - Basic vmtouch integration
 - Simple systemd service setup

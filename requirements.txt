@@ -1,6 +1,8 @@
 # AppCache-Lock Python Dependencies
-# This project uses only Python standard library modules.
-# No external dependencies are required.
+# Install all dependencies with: pip install -r requirements.txt
+
+# System and process monitoring
+psutil>=5.8.0
 
 # System requirements:
 # - Python 3.6+
