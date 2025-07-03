@@ -1,0 +1,8 @@
+# AppCache-Lock Python Dependencies
+# This project uses only Python standard library modules.
+# No external dependencies are required.
+
+# System requirements:
+# - Python 3.6+
+# - vmtouch (install with: sudo apt install vmtouch)
+# - systemd (for service installation)

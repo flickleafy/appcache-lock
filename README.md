@@ -1,17 +1,18 @@
 # AppCache-Lock
 
-AppCache-Lock is a utility designed to preload application executables and resource directories into memory. By locking these directories using [vmtouch](https://hoytech.com/vmtouch/), the script helps prevent them from being swapped out, potentially improving performance for frequently used applications and resources.
+AppCache-Lock is a professional Python utility designed to preload application executables and resource directories into memory. By locking these directories using [vmtouch](https://hoytech.com/vmtouch/), the application helps prevent them from being swapped out, potentially improving performance for frequently used applications and resources.
 
 ## Overview
 
-This project consists of the following files:
+This project consists of the following components:
 
-- **preload-apps.sh**  
-  The main script that:
+- **appcache_lock.py**  
+  The main Python application that:
   - Searches for application executables listed in `app_commands`.
   - Resolves their real paths and extracts the directories.
   - Adds additional resource directories from `resource_dirs`.
-  - Locks these directories in memory using vmtouch.
+  - Locks these directories in memory using vmtouch with concurrent processing.
+  - Provides installation, verification, and management capabilities.
 
 - **app_commands**  
   A text file listing application command names (one per line) that the script will locate in your system's PATH.
@@ -19,118 +20,259 @@ This project consists of the following files:
 - **resource_dirs**  
   A text file listing directories (one per line) that contain resources to be locked in memory.
 
-- **installer.sh**  
-  An installation script that:
-  - Copies the above files into a dedicated folder: `/usr/local/bin/appcache-lock`.
-  - Sets up a systemd service to run `preload-apps.sh` automatically at boot.
+- **Legacy bash scripts** (now deprecated):
+  - `preload-apps.sh`, `installer.sh`, `verify-size.sh` - Original bash implementation
 
 ## Features
 
-- **Dynamic Discovery:** Automatically locates application executables and determines their installation directories.
-- **Memory Locking:** Uses vmtouch to lock directories in RAM, ensuring key data remains in the OS page cache.
-- **Duplicate Prevention**: Filters out duplicate directories to avoid redundant operations.
-- **External Configuration:** Easily update which applications and directories are targeted via the `app_commands` and `resource_dirs` files.
-- **Easy Deployment**: An installer that copies files into a dedicated directory and configures a systemd service for automated execution.
-- **Automated Startup:** Integrates with systemd to execute the preload script during system boot.
+- **Modern Python Implementation:** Professional, maintainable Python code with proper error handling
+- **Concurrent Processing:** Uses ThreadPoolExecutor for efficient parallel vmtouch operations
+- **Dynamic Discovery:** Automatically locates application executables and determines their installation directories
+- **Memory Locking:** Uses vmtouch to lock directories in RAM, ensuring key data remains in the OS page cache
+- **Duplicate Prevention:** Filters out duplicate directories to avoid redundant operations
+- **Configuration Management:** Easily update which applications and directories are targeted via configuration files
+- **Integrated Installation:** Built-in installer that sets up systemd service for automated execution
+- **Size Verification:** Calculate and display directory sizes before locking
+- **Graceful Shutdown:** Proper signal handling for clean process termination
+- **Comprehensive Logging:** Detailed logging with configurable verbosity levels
+- **Root Privilege Handling:** Intelligent sudo usage when needed
 
 ## Prerequisites
 
 Before installing AppCache-Lock, ensure you have:
 
-- A Unix-like operating system with systemd support.
-- Bash shell.
-- [vmtouch](https://hoytech.com/vmtouch/) installed and available in your PATH. `sudo apt install vmtouch` on Debian/Ubuntu).
-- `realpath` command available (typically part of GNU core utilities).
-- Root privileges to install the scripts and configure systemd.
+- Python 3.6 or higher
+- A Unix-like operating system with systemd support
+- [vmtouch](https://hoytech.com/vmtouch/) installed and available in your PATH (`sudo apt install vmtouch` on Debian/Ubuntu)
+- Root privileges to install the scripts and configure systemd (for installation only)
 
 ## Installation
 
+### Quick Installation
+
 1. **Clone or Download the Repository**  
-   Make sure the repository includes the following files:
-   - `preload-apps.sh`
-   - `installer.sh`
-   - `app_commands`
-   - `resource_dirs`
-
-2. **Run the Installer Script**  
-   Open a terminal, navigate to the repository directory, and run:
-
    ```bash
-   sudo ./installer.sh
+   git clone https://github.com/flickleafy/appcache-lock.git
+   cd appcache-lock
    ```
 
-  This will:
+2. **Install as System Service**  
+   ```bash
+   sudo python3 appcache_lock.py install
+   ```
 
-- Create the directory `/usr/local/bin/appcache-lock`.
-- Copy `preload-apps.sh`, `app_commands`, and `resource_dirs` into that folder.
-- Create a systemd service file named `appcache-lock.service` to run the preload script at boot.
-- Reload the systemd daemon and enable the new service.
-
-3. **Start the service manually**  (or reboot to let it run automatically):
-
+3. **Start the service**  
    ```bash
    sudo systemctl start appcache-lock.service
    ```
 
+### Manual Usage
+
+You can also run AppCache-Lock manually without installing it as a service:
+
+```bash
+# Preload applications into memory
+python3 appcache_lock.py preload
+
+# Check directory sizes before locking
+python3 appcache_lock.py verify-sizes
+
+# Run with verbose output
+python3 appcache_lock.py preload --verbose
+
 ## Configuration
 
-### app\_commands
+AppCache-Lock uses two main configuration files:
 
-This file contains the list of application commands that AppCache-Lock will search for. Each command should be on a new line. For example:
+### app_commands
+
+This file contains the list of application commands that AppCache-Lock will search for. Each command should be on a new line. Comments start with `#`.
 
 ```plaintext
-# List of application commands
+# List of application commands to preload
 google-chrome
 code
+firefox
+vlc
+gimp
+libreoffice
 ```
 
-### resource\_dirs
+### resource_dirs
 
-This file lists the directories that you wish to lock in memory. Each directory should be specified on a separate line. For example:
+This file contains additional directories to lock into memory. These are typically resource directories that applications use frequently.
 
 ```plaintext
-# List of resource directories
+# List of resource directories to preload
 /opt/google/chrome
 /usr/share/code
+/usr/share/firefox
+/usr/lib/vlc
 ```
 
-Feel free to modify these files to suit your environment.
+## Command Line Options
 
-### Systemd Service
+```bash
+# Basic usage
+python3 appcache_lock.py <command> [options]
 
-The installer creates a systemd service file at `/etc/systemd/system/appcache-lock.service` with the following configuration:
+# Available commands:
+preload         # Preload applications into memory
+verify-sizes    # Calculate and display directory sizes
+install         # Install as system service
+uninstall       # Remove system service
 
-```ini
-[Unit]
-Description=Preload and lock specific apps into RAM using appcache-lock
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/appcache-lock/preload-apps.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
+# Common options:
+--verbose, -v           # Enable verbose output
+--config-dir DIR        # Use custom configuration directory
+--max-workers N         # Maximum concurrent processes (preload only)
+--timeout N             # Timeout per operation in seconds (preload only)
 ```
 
-This service is set to run once at boot, ensuring that your specified application and resource directories are locked in memory.
+## Examples
 
-## Usage
+```bash
+# Check what directories will be cached and their sizes
+python3 appcache_lock.py verify-sizes
 
-After installation, the systemd service will automatically run at boot. You can also manage the service manually:
+# Preload with verbose output
+python3 appcache_lock.py preload --verbose
 
-- **Start the Service:**
+# Preload with custom settings
+python3 appcache_lock.py preload --max-workers 8 --timeout 600
 
-    ```bash
-    sudo systemctl start appcache-lock.service
-    ```
+# Install as system service
+sudo python3 appcache_lock.py install
 
-- **Check the Service Status:**
+# Remove system service
+sudo python3 appcache_lock.py uninstall
+```
 
-    ```bash
-    sudo systemctl status appcache-lock.service
-    ```
+## Service Management
+
+After installation, you can manage the service using standard systemctl commands:
+
+```bash
+# Start the service
+sudo systemctl start appcache-lock.service
+
+# Stop the service
+sudo systemctl stop appcache-lock.service
+
+# Check service status
+sudo systemctl status appcache-lock.service
+
+# View service logs
+sudo journalctl -u appcache-lock.service
+
+# Disable automatic startup
+sudo systemctl disable appcache-lock.service
+
+# Enable automatic startup
+sudo systemctl enable appcache-lock.service
+```
+## Performance Impact
+
+AppCache-Lock can significantly improve application startup times and responsiveness by:
+
+- **Reducing Disk I/O:** Frequently accessed files remain in memory
+- **Faster Application Startup:** Executables and libraries load from RAM instead of disk
+- **Improved Responsiveness:** Resource files are immediately available
+- **SSD Longevity:** Reduced read operations extend SSD lifespan
+
+### Benchmarking
+
+Use the `verify-sizes` command to understand memory usage before implementation:
+
+```bash
+python3 appcache_lock.py verify-sizes
+```
+
+This will show you exactly how much RAM will be used for caching.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **vmtouch not found**
+   ```bash
+   sudo apt install vmtouch  # Debian/Ubuntu
+   sudo yum install vmtouch  # CentOS/RHEL
+   ```
+
+2. **Permission denied errors**
+   - Ensure you run with appropriate privileges
+   - The script automatically uses sudo when needed
+
+3. **Service fails to start**
+   ```bash
+   # Check service logs
+   sudo journalctl -u appcache-lock.service -f
+   
+   # Verify configuration files exist
+   ls -la /usr/local/bin/appcache-lock/
+   ```
+
+4. **High memory usage**
+   - Use `verify-sizes` to check memory requirements
+   - Remove large directories from configuration if needed
+   - Monitor with `free -h` or `htop`
+
+### Debug Mode
+
+Run with verbose output for detailed information:
+
+```bash
+python3 appcache_lock.py preload --verbose
+```
+
+## Migration from Bash Version
+
+If you're upgrading from the bash version:
+
+1. **Backup your configuration:**
+   ```bash
+   cp app_commands app_commands.backup
+   cp resource_dirs resource_dirs.backup
+   ```
+
+2. **Uninstall old version:**
+   ```bash
+   sudo systemctl stop appcache-lock.service
+   sudo systemctl disable appcache-lock.service
+   sudo rm /etc/systemd/system/appcache-lock.service
+   sudo rm -rf /usr/local/bin/appcache-lock
+   sudo systemctl daemon-reload
+   ```
+
+3. **Install new Python version:**
+   ```bash
+   sudo python3 appcache_lock.py install
+   ```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit pull requests or open issues on GitHub.
+
+## License
+
+This project is licensed under the GPL-3.0 License - see the LICENSE file for details.
+
+## Changelog
+
+### Version 2.0.0
+- Complete rewrite in Python
+- Concurrent processing for improved performance
+- Built-in installation and service management
+- Enhanced error handling and logging
+- Configuration validation
+- Size calculation and verification
+- Graceful shutdown handling
+
+### Version 1.x (Legacy)
+- Original bash implementation
+- Basic vmtouch integration
+- Simple systemd service setup
 
 - **Reload Systemd Daemon (if changes are made):**
 
